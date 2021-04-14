@@ -362,17 +362,17 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       AvailabilityZones: !GetAZs ''
-      LaunchConfigurationName: !Ref 'LaunchConfig'
+      LaunchConfigurationName: !Ref 'LaunchConfig' #referenced in resource section later
       MinSize: '1'
       MaxSize: '3'
-      LoadBalancerNames: [!Ref 'ElasticLoadBalancer']
+      LoadBalancerNames: [!Ref 'ElasticLoadBalancer'] #referenced in resource section later
       NotificationConfigurations:
-        - TopicARN: !Ref 'NotificationTopic'
+        - TopicARN: !Ref 'NotificationTopic' #referenced in resource section earlier
           NotificationTypes: ['autoscaling:EC2_INSTANCE_LAUNCH', 'autoscaling:EC2_INSTANCE_LAUNCH_ERROR', 'autoscaling:EC2_INSTANCE_TERMINATE', 'autoscaling:EC2_INSTANCE_TERMINATE_ERROR']
 
       CreationPolicy:
         ResourceSignal:
-          Timeout: PT15M
+          Timeout: PT15M #Period of Time 15 minutes
           Count: 1
 
       UpdatePolicy:
@@ -382,60 +382,63 @@ Resources:
           PauseTime: PT15M
           WaitOnResourceSignals: true
 
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      Comment: Install a simple application
+      AWS::CloudFormation::Init: #define config tasks for cfn-init helper script for config of EC2 instances
+        config:
+          packages:
+            yum:
+              httpd: []
+              
+          files:
+            /var/www/html/index.html:
+              content: !Join ['
 
-    LaunchConfig:
-      Type: AWS::AutoScaling::LaunchConfiguration
-      Metadata:
-        Comment: Install a simple application
-        AWS::CloudFormation::Init:
-          config:
-            packages:
-              yum:
-                httpd: []
-            files:
-              /var/www/html/index.html:
-                content: !Join ['
+                  ', [<img src=", !FindInMap [Region2Examples, !Ref 'AWS::Region',
+                    Examples], /cloudformation_graphic.png" alt="AWS CloudFormation
+                    Logo"/>, '<h1>Congratulations, you have successfully launched
+                    the AWS CloudFormation sample.</h1>']]
+              mode: '000644'
+              owner: root
+              group: root
 
-                    ', [<img src=", !FindInMap [Region2Examples, !Ref 'AWS::Region',
-                      Examples], /cloudformation_graphic.png" alt="AWS CloudFormation
-                      Logo"/>, '<h1>Congratulations, you have successfully launched
-                      the AWS CloudFormation sample.</h1>']]
-                mode: '000644'
-                owner: root
-                group: root
-              /etc/cfn/cfn-hup.conf:
-                content: !Join ['', ['[main]
+            /etc/cfn/cfn-hup.conf:
+              content: !Join ['', ['[main]
 
-                      ', stack=, !Ref 'AWS::StackId', '
+                    ', stack=, !Ref 'AWS::StackId', '
 
-                      ', region=, !Ref 'AWS::Region', '
+                    ', region=, !Ref 'AWS::Region', '
 
-                      ']]
-                mode: '000400'
-                owner: root
-                group: root
-              /etc/cfn/hooks.d/cfn-auto-reloader.conf:
-                content: !Join ['', ['[cfn-auto-reloader-hook]
+                    ']]
+              mode: '000400'
+              owner: root
+              group: root
 
-                      ', 'triggers=post.update
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join ['', ['[cfn-auto-reloader-hook]
 
-                      ', 'path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
+                    ', 'triggers=post.update
 
-                      ', 'action=/opt/aws/bin/cfn-init -v ', '         --stack ', !Ref 'AWS::StackName',
-                    '         --resource LaunchConfig ', '         --region ', !Ref 'AWS::Region',
-                    '
-                      ', 'runas=root
+                    ', 'path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
 
-                      ']]
-            services:
-              sysvinit:
-                httpd:
-                  enabled: true
-                  ensureRunning: true
-                cfn-hup:
-                  enabled: true
-                  ensureRunning: true
-                  files: [/etc/cfn/cfn-hup.conf, /etc/cfn/hooks.d/cfn-auto-reloader.conf]
+                    ', 'action=/opt/aws/bin/cfn-init -v ', '         --stack ', !Ref 'AWS::StackName',
+                  '         --resource LaunchConfig ', '         --region ', !Ref 'AWS::Region',
+                  '
+                    ', 'runas=root
+
+                    ']]
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files: [/etc/cfn/cfn-hup.conf, /etc/cfn/hooks.d/cfn-auto-reloader.conf]
+      
       Properties:
         KeyName: !Ref 'KeyName'
         ImageId: !FindInMap [AWSRegionArch2AMI, !Ref 'AWS::Region', !FindInMap [AWSInstanceType2Arch,
@@ -456,79 +459,86 @@ Resources:
             '         --resource WebServerGroup ', '         --region ', !Ref 'AWS::Region',
             '
               ']
-    WebServerScaleUpPolicy:
-      Type: AWS::AutoScaling::ScalingPolicy
-      Properties:
-        AdjustmentType: ChangeInCapacity
-        AutoScalingGroupName: !Ref 'WebServerGroup'
-        Cooldown: '60'
-        ScalingAdjustment: 1
-    WebServerScaleDownPolicy:
-      Type: AWS::AutoScaling::ScalingPolicy
-      Properties:
-        AdjustmentType: ChangeInCapacity
-        AutoScalingGroupName: !Ref 'WebServerGroup'
-        Cooldown: '60'
-        ScalingAdjustment: -1
-    CPUAlarmHigh:
-      Type: AWS::CloudWatch::Alarm
-      Properties:
-        AlarmDescription: Scale-up if CPU > 90% for 10 minutes
-        MetricName: CPUUtilization
-        Namespace: AWS/EC2
-        Statistic: Average
-        Period: 300
-        EvaluationPeriods: 2
-        Threshold: 90
-        AlarmActions: [!Ref 'WebServerScaleUpPolicy']
-        Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref 'WebServerGroup'
-        ComparisonOperator: GreaterThanThreshold
-    CPUAlarmLow:
-      Type: AWS::CloudWatch::Alarm
-      Properties:
-        AlarmDescription: Scale-down if CPU < 70% for 10 minutes
-        MetricName: CPUUtilization
-        Namespace: AWS/EC2
-        Statistic: Average
-        Period: 300
-        EvaluationPeriods: 2
-        Threshold: 70
-        AlarmActions: [!Ref 'WebServerScaleDownPolicy']
-        Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref 'WebServerGroup'
-        ComparisonOperator: LessThanThreshold
-    ElasticLoadBalancer:
-      Type: AWS::ElasticLoadBalancing::LoadBalancer
-      Properties:
-        AvailabilityZones: !GetAZs ''
-        CrossZone: true
-        Listeners:
-        - LoadBalancerPort: '80'
-          InstancePort: '80'
-          Protocol: HTTP
-        HealthCheck:
-          Target: HTTP:80/
-          HealthyThreshold: '3'
-          UnhealthyThreshold: '5'
-          Interval: '30'
-          Timeout: '5'
-    InstanceSecurityGroup:
-      Type: AWS::EC2::SecurityGroup
-      Properties:
-        GroupDescription: Enable SSH access and HTTP from the load balancer only
-        SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !Ref 'SSHLocation'
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourceSecurityGroupOwnerId: !GetAtt [ElasticLoadBalancer, SourceSecurityGroup.OwnerAlias]
-          SourceSecurityGroupName: !GetAtt [ElasticLoadBalancer, SourceSecurityGroup.GroupName]
+
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'WebServerGroup'
+      Cooldown: '60'
+      ScalingAdjustment: 1
+
+  WebServerScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'WebServerGroup'
+      Cooldown: '60'
+      ScalingAdjustment: -1
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 90% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 90
+      AlarmActions: [!Ref 'WebServerScaleUpPolicy']
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref 'WebServerGroup'
+      ComparisonOperator: GreaterThanThreshold
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 70% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      AlarmActions: [!Ref 'WebServerScaleDownPolicy']
+      Dimensions:
+      - Name: AutoScalingGroupName
+        Value: !Ref 'WebServerGroup'
+      ComparisonOperator: LessThanThreshold
+
+  ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      AvailabilityZones: !GetAZs ''
+      CrossZone: true
+      Listeners:
+      - LoadBalancerPort: '80'
+        InstancePort: '80'
+        Protocol: HTTP
+      HealthCheck:
+        Target: HTTP:80/
+        HealthyThreshold: '3'
+        UnhealthyThreshold: '5'
+        Interval: '30'
+        Timeout: '5'
+  
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access and HTTP from the load balancer only
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Ref 'SSHLocation'
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupOwnerId: !GetAtt [ElasticLoadBalancer, SourceSecurityGroup.OwnerAlias]
+        SourceSecurityGroupName: !GetAtt [ElasticLoadBalancer, SourceSecurityGroup.GroupName]
+
 Outputs:
   URL:
     Description: The URL of the website
