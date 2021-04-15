@@ -7,5 +7,5 @@ Resources:
       ImageId: ami-a4c7edb2
       InstanceType: t2.micro
       SecurityGroups:
-        # we reference the output here, using the Fn::ImportValue function
+        # we reference the output of the other CF template here, using the Fn::ImportValue function
         - !ImportValue SSHSecurityGroup
