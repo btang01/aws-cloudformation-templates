@@ -1,0 +1,10 @@
+---
+#danger - this deletes the old bucket and creates a new bucket
+#data will be gone 
+
+Resources:
+  MyS3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      AccessControl: PublicRead
+      BucketName: "insert-some-random-string-here-123456"

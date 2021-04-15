@@ -1,0 +1,49 @@
+{
+  "course": "AWS Lambda",
+  "instructor": "Max Power",
+  "instructor-full": {
+    "first-name": "Max",
+    "last-name": "Power",
+    "awesomeness-level": 9000
+  },
+  "sections-list": [
+    "Introduction",
+    "Deploying your first function",
+    "Learning AWS Lambda in depth",
+    "Real world examples"
+  ],
+  "lectures": [
+    {
+      "lecture-id": 1,
+      "lecture-name": "intro",
+      "lecture-length": "5:15"
+    },
+    {
+      "lecture-id": 2,
+      "lecture-name": "aws lambda",
+      "lecture-length": "10:30"
+    }
+  ]
+}
+
+---
+course: "AWS Lambda"
+instructor: "Max Power"
+instructor-full:
+  first-name: "Max"
+  last-name: "Power"
+  awesomeness-level: 9000
+
+sections-list:
+  - Introduction
+  - Deploying your first function
+  - Learning AWS Lambda in depth
+  - Real world examples
+
+lectures:
+  - lecture-id: 1
+    lecture-name: intro
+    lecture-length: '5:15'
+  - lecture-id: 2
+    lecture-name: aws lambda
+    lecture-length: '10:30'
