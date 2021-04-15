@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
+#template creates 1 resource for test env, 3 resources for prod env
 Mappings:
   RegionMap:
     us-east-1:
