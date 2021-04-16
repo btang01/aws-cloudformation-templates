@@ -78,12 +78,14 @@ Resources:
       VpcId: !Ref MyVPC
       # the select function allows us to select across a list
       CidrBlock: !Select [0, !Ref DbSubnetIpBlocks]
+
   DbSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref MyVPC
       # the select function allows us to select across a list
       CidrBlock: !Select [1, !Ref DbSubnetIpBlocks]
+      
   DbSubnet3:
     Type: AWS::EC2::Subnet
     Properties:
