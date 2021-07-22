@@ -243,3 +243,44 @@ Resources:
         - !Ref 'PrivateRouteTableTwo'
       ServiceName: !Join [ "", [ "com.amazonaws.", { "Ref": "AWS::Region" }, ".dynamodb" ] ]
       VpcId: !Ref 'VPC'
+  
+  # ECS Resources
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+
+  # A security group for the EC2 hosts that will run the containers.
+  # Two rules, allowing network traffic from a public facing load
+  # balancer and from other hosts in the security group.
+  #
+  # Remove any of the following ingress rules that are not needed.
+  # If you want to make direct requests to a container using its
+  # public IP address you'll need to add a security group rule
+  # to allow traffic from all IP addresses.
+  EcsHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the ECS hosts that run containers
+      VpcId: !Ref 'VPC'
+
+  EcsSecurityGroupIngressFromPublicALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref 'PublicLoadBalancerSG'
+      
+  EcsSecurityGroupIngressFromPrivateALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the private ALB
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref 'PrivateLoadBalancerSG'
+  EcsSecurityGroupIngressFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref 'EcsHostSecurityGroup'

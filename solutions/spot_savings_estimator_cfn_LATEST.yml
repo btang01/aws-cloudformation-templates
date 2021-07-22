@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Estimate savings with EC2 Spot
+
+Outputs:
+  S3Bucket:
+    Description: S3 bucket to store AWS Glue DataBrew and Job results
+    Value: !Ref S3Bucket
+  AWSGlueDataBrewRecipe:
+    Description: Provided AWS Glue DataBrew recipe to filter CUR for Amazon EC2 On Demand use only
+    Value: !Ref DataBrewRecipe
+  AWSGlueJob:
+    Description: AWS Glue script to get historic spot prices
+    Value: !Ref GlueJob
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: AWSGlueDataBrewOutput/
+                  - Name: suffix
+                    Value: .csv
+            Function: !GetAtt StartGlueJob.Arn
+  
+  S3CustomResource:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt CreateFolder.Arn
+      the_bucket: !Ref S3Bucket
+      dirs_to_create: "AWSGlueDataBrewOutput/"
+  
+  S3InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref StartGlueJob
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+  
+  CreateFolder:
+     Type: AWS::Lambda::Function
+     Properties:
+       Description: Work with S3 Buckets!
+       FunctionName: !Sub '${AWS::StackName}-CreateFolder'
+       Handler: index.handler
+       Role: !GetAtt CreateFolderRole.Arn
+       Timeout: 360
+       Runtime: python3.8
+       Code:
+         ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          def handler(event, context):
+              the_event = event['RequestType']
+              print("The event is: ", str(the_event))
+              response_data = {}
+              s_3 = boto3.client('s3')
+              the_bucket = event['ResourceProperties']['the_bucket']
+              dirs_to_create = event['ResourceProperties']['dirs_to_create']
+              try:
+                  if the_event in ('Create', 'Update'):
+                      print("Requested folders: ", dirs_to_create)
+                      print("Creating: ", str(dirs_to_create))
+                      s_3.put_object(Bucket=the_bucket,Key=(dirs_to_create) )
+                      s_3.put_object(Body="import sys\nimport boto3\nimport csv\nimport datetime\n\nfrom awsglue.utils import getResolvedOptions\ns3 = boto3.resource('s3')\nargs = getResolvedOptions(sys.argv, ['BUCKET', 'KEY'])\ns3.meta.client.download_file(args['BUCKET'], args['KEY'], '/tmp/cur_file.csv')\n\nwith open('/tmp/cur_file.csv', 'r') as csv_file:\n\tcsv_reader = csv.DictReader(csv_file)\n\trows = [row for row in csv_reader]\n\theaders = [key for key in rows[0].keys()]\n\tprint(headers)\n\n\tspot_prices = []\n\tfor row in range(0, len(rows)):\n\t\tec2 = boto3.client('ec2', region_name = rows[row]['Region'])\n\t\tspot_prices.append(ec2.describe_spot_price_history(AvailabilityZone = rows[row]['AvailabilityZone'],\n\t\t\tInstanceTypes = [rows[row]['InstanceType']],\n\t\t\tMaxResults = 1000,\n\t\t\tStartTime = datetime.datetime(int(rows[0]['UsageStartYear']), int(rows[0]['UsageStartMonth']), int(rows[0]['UsageStartDay'])).isoformat(),\n\t\t\tEndTime = datetime.datetime(int(rows[0]['UsageEndYear']), int(rows[0]['UsageEndMonth']), int(rows[0]['UsageEndDay'])).isoformat(),\n\t\t\tProductDescriptions = [rows[row]['OperatingSystem']]))\n\tdef get_spot_price_stats(x):\n\t\tec2_line_item = [x[i] for i in range(len(x))]\n\t\tspot_price_range = []\n\t\taverage = sum(ec2_line_item)/len(ec2_line_item)\n\t\tminimum = min(ec2_line_item)\n\t\tmaximum = max(ec2_line_item)\n\t\tspot_price_range.append([average, minimum, maximum])\n\t\treturn spot_price_range\n\n\tline_item_spot_price = []\n\tfor i in range(len(spot_prices)):\n\t\tline_item = [float(spot_prices[i]['SpotPriceHistory'][j]['SpotPrice']) for j in range(len(spot_prices[i]['SpotPriceHistory']))]\n\t\tfor j in range(len(spot_prices[i]['SpotPriceHistory'])):\n\t\t\tline_item.append(float(spot_prices[i]['SpotPriceHistory'][j]['SpotPrice']))\n\t\tline_item_spot_price.append(line_item)\n\n\tmin_max_average = [get_spot_price_stats(line_item_spot_price[line_item]) for line_item in range(len(line_item_spot_price))]\n\tfor row in range(len(min_max_average)):\n\t\trows[row].update([('AverageSpotPrice', min_max_average[row][0][0]), ('MinSpotPrice', min_max_average[row][0][1]), ('MaxSpotPrice', \n\t\tmin_max_average[row][0][2])])\n\twith open('/tmp/final_results.csv', 'w') as file:\n\t\theaders.extend(['AverageSpotPrice', 'MinSpotPrice', 'MaxSpotPrice'])\n\t\tcsv_writer = csv.DictWriter(file, fieldnames=headers)\n\t\tcsv_writer.writeheader()\n\n\t\tfor line in rows:\n\t\t\tcsv_writer.writerow(line)\n\tfinalupload = '/tmp/final_results.csv'\n\ts3_client = boto3.client('s3')\n\ts3_client.upload_file(finalupload, args['BUCKET'], args['KEY'].split('/')[1][:-4] + '_with_spot_prices.csv')",Bucket=the_bucket,Key='AWSGlueScript/get_spot_prices.py')
+                  elif the_event == 'Delete':
+                      print("Deleting S3 content...")
+                      b_operator = boto3.resource('s3')
+                      b_operator.Bucket(str(the_bucket)).objects.all().delete()
+                  # Everything OK... send the signal back
+                  print("Execution succesfull!")
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.SUCCESS,
+                                   response_data)
+              except Exception as e:
+                  print("Execution failed...")
+                  print(str(e))
+                  response_data['Data'] = str(e)
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.FAILED,
+                                   response_data)
+  CreateFolderRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       ManagedPolicyArns:
+         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:DeleteObject
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}/*"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-LambdaCreateFolder-S3Object
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:ListBucket
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-LambdaCreateFolder-S3
+       RoleName: !Sub ${AWS::StackName}-CreateFolderRole
+  
+  CreateGlueScriptRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       ManagedPolicyArns:
+         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:DeleteObject
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}/*"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-LambdaCreateGlueScript-S3Object
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:ListBucket
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-LambdaCreateGlueScript-S3         
+       RoleName: !Sub ${AWS::StackName}-LambdaCreateGlueScript
+  
+  StartGlueJob:
+     Type: AWS::Lambda::Function
+     Properties:
+       Description: Lambda function to start Glue Job
+       FunctionName: !Sub '${AWS::StackName}-StartGlueJob'
+       Handler: index.lambda_handler
+       Role: !GetAtt StartGlueJobRole.Arn
+       Timeout: 360
+       Runtime: python3.8
+       Environment:
+         Variables:
+           GLUEJOB: !Ref GlueJob
+       Code:
+         ZipFile: |
+          import boto3
+          import os
+          client = boto3.client('glue')
+          glueJobName = os.environ['GLUEJOB']
+          def lambda_handler(event, context):
+              bucket = event['Records'][0]['s3']['bucket']['name']
+              key = event['Records'][0]['s3']['object']['key']
+              response = client.start_job_run(JobName = glueJobName, Arguments = {'--BUCKET': bucket, '--KEY': key})
+              return response
+  
+  StartGlueJobRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       ManagedPolicyArns:
+         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole 
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:GetObject
+             - s3:GetObjectVersion
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}/*"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-StartGlueJob-S3Object
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:ListBucket
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-StartGlueJob-S3Bucket
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - glue:StartJobRun
+             Effect: Allow
+             Resource:
+             - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${GlueJob}"
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-StartGlueJob
+       RoleName: !Sub ${AWS::StackName}-StartGlueJob
+  
+  SpotGlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: !Sub ${AWS::StackName}-SpotGlueJobRole
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                - ec2:DescribeSpotPriceHistory
+                Effect: "Allow"
+                Resource: "*"
+              - Action:
+                - s3:PutObject
+                - s3:GetObject
+                Effect: "Allow"
+                Resource: 
+                - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}/*"
+              - Action:
+                - s3:ListBucket
+                Effect: "Allow"
+                Resource: 
+                - !Sub "arn:aws:s3:::spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}"
+  
+  GlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: Get-Spot-Prices
+      Role: !Ref SpotGlueJobRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub
+          - "s3://${bucket}/AWSGlueScript/get_spot_prices.py"
+          - { bucket: !Sub "spot-savings-estimator-${AWS::StackName}-${AWS::AccountId}" }
+  
+  DataBrewRecipe:
+    Type: AWS::DataBrew::Recipe
+    Properties:
+      Name: CUR-Transform-SpotGlueJob
+      Description: This transforms a monthly CUR report to prepare in the right format for a Glue job to retrieve Spot historical prices
+      Steps:
+      - Action:
+          Operation: REMOVE_VALUES
+          Parameters:
+            SourceColumn: product_tenancy
+        ConditionExpressions:
+          - Condition: IS_NOT
+            Value: '["Shared"]'
+            TargetColumn: product_tenancy
+      - Action:
+          Operation: FORMAT_DATE
+          Parameters:
+            SourceColumn: line_item_usage_start_date
+            TargetDateFormat: MM/dd/yyyy
+      - Action:
+          Operation: FORMAT_DATE
+          Parameters:
+            SourceColumn: line_item_usage_end_date
+            TargetDateFormat: MM/dd/yyyy
+      - Action:
+          Operation: SPLIT_COLUMN_SINGLE_DELIMITER
+          Parameters:
+            IncludeInSplit: 'true'
+            Limit: '2'
+            Pattern: /
+            SourceColumn: line_item_usage_start_date
+      - Action:
+          Operation: SPLIT_COLUMN_SINGLE_DELIMITER
+          Parameters:
+            IncludeInSplit: 'true'
+            Limit: '2'
+            Pattern: /
+            SourceColumn: line_item_usage_end_date
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_start_date_1
+            TargetColumn: UsageStartMonth
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_start_date_2
+            TargetColumn: UsageStartDay
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_start_date_3
+            TargetColumn: UsageStartYear
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_end_date_1
+            TargetColumn: UsageEndMonth
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_end_date_2
+            TargetColumn: UsageEndDay
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_end_date_3
+            TargetColumn: UsageEndYear
+      - Action:
+          Operation: REMOVE_VALUES
+          Parameters:
+            SourceColumn: line_item_line_item_description
+        ConditionExpressions:
+          - Condition: NOT_CONTAINS
+            Value: On Demand
+            TargetColumn: line_item_line_item_description
+      - Action:
+          Operation: REMOVE_VALUES
+          Parameters:
+            SourceColumn: line_item_product_code
+        ConditionExpressions:
+          - Condition: IS_NOT
+            Value: '["AmazonEC2"]'
+            TargetColumn: line_item_product_code
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: product_instance_type
+            TargetColumn: InstanceType
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: product_operating_system
+            TargetColumn: OperatingSystem
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: product_region
+            TargetColumn: Region
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_availability_zone
+            TargetColumn: AvailabilityZone
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: bill_payer_account_id
+            TargetColumn: PayerAccountId
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_account_id
+            TargetColumn: UsageAccountId
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_operation
+            TargetColumn: Operation
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_usage_amount
+            TargetColumn: UsageAmount
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_unblended_rate
+            TargetColumn: UnblendedRate
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_unblended_cost
+            TargetColumn: UnblendedCost
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_blended_rate
+            TargetColumn: BlendedRate
+      - Action:
+          Operation: RENAME
+          Parameters:
+            SourceColumn: line_item_blended_cost
+            TargetColumn: BlendedCost
+      - Action:
+          Operation: REPLACE_TEXT
+          Parameters:
+            Pattern: Linux
+            SourceColumn: OperatingSystem
+            Value: "Linux/UNIX"
+      - Action:
+          Operation: REPLACE_TEXT
+          Parameters:
+            Pattern: SUSE
+            SourceColumn: OperatingSystem
+            Value: "SUSE Linux"
+      - Action:
+          Operation: REPLACE_TEXT
+          Parameters:
+            Pattern: RHEL
+            SourceColumn: OperatingSystem
+            Value: "Red Hat Enterprise Linux"
